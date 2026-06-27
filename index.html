@@ -520,15 +520,13 @@ function updateRef(dt){
   if(Ref.y<FY+15){Ref.vy=Math.abs(Ref.vy);Ref.y=FY+15;}
   if(Ref.y>FB-15){Ref.vy=-Math.abs(Ref.vy);Ref.y=FB-15;}
 
-  // Colisão com Felipe (atordoa brevemente, com cooldown para não travar)
-  if(P.stunTimer<=0 && dist(Ref.x,Ref.y,P.x,P.y)<Ref.r+P.r+2){
-    P.stunTimer=0.4;
-    // Empurra o juiz para longe do Felipe
+  // Colisão com Felipe (só efeito visual, sem travar o jogador)
+  if(dist(Ref.x,Ref.y,P.x,P.y)<Ref.r+P.r+2){
     const ang=Math.atan2(Ref.y-P.y, Ref.x-P.x);
-    const sep=Ref.r+P.r+20;
+    const sep=Ref.r+P.r+25;
     Ref.x=P.x+Math.cos(ang)*sep;
     Ref.y=P.y+Math.sin(ang)*sep;
-    Ref.vx=Math.cos(ang)*150; Ref.vy=Math.sin(ang)*150;
+    Ref.vx=Math.cos(ang)*180; Ref.vy=Math.sin(ang)*180;
     addPart(Ref.x,Ref.y,'😵',0.5);
   }
   // Deflecte bola
