@@ -115,7 +115,7 @@ let P,Ball,Opps,GK,Ref,Coins,Boots,Particles;
 function initMatch(){
   const ph=PHASES[S.phase];
   S.half=1; S.time=120; S.score={p:0,o:0};
-  S.coins=0; S.extraTime=false; S.goalAnim=0; S.goalCooldown=0;
+  S.coins=0; S.extraTime=false; S.goalAnim=0; S.goalCooldown=0; S.goalPendingResolve=false;
 
   // Felipe
   P={
@@ -214,7 +214,15 @@ function update(dt){
   if(S.screen!=='match') return;
 
   // Timers
-  if(S.goalAnim>0){ S.goalAnim-=dt; return; } // pausa animação de gol
+  if(S.goalAnim>0){
+    S.goalAnim-=dt;
+    if(S.goalAnim<=0){
+      S.goalAnim=0;
+      if(S.goalPendingResolve){ S.goalPendingResolve=false; resolveExtraTime(); return; }
+      resetPositions();
+    }
+    return;
+  }
   if(S.goalCooldown>0){ S.goalCooldown-=dt; }
 
   // Cronômetro
@@ -366,12 +374,14 @@ function updateBall(dt){
   if(!P.hasBall && P.kickCD<=0 && dist(Ball.x,Ball.y,P.x,P.y)<P.r+Ball.r+4){
     takeBall('P');
   }
-  // Adversário pega bola
-  Opps.forEach(o=>{
-    if(!o.hasBall && !P.hasBall && dist(Ball.x,Ball.y,o.x,o.y)<o.r+Ball.r+3){
-      takeBall('O',o);
+  // Adversário pega bola (só um por vez)
+  if(!P.hasBall){
+    for(const o of Opps){
+      if(!o.hasBall && dist(Ball.x,Ball.y,o.x,o.y)<o.r+Ball.r+3){
+        takeBall('O',o); break;
+      }
     }
-  });
+  }
 
   // Fogo
   if(Ball.onFire){
@@ -403,9 +413,8 @@ function triggerGoal(scorer){
   } else {
     addPart(LG.x+15, LG.y+LG.h/2, '😱', 1.2);
   }
-  // Extra time gol -> fim imediato
-  if(S.extraTime){ setTimeout(()=>resolveExtraTime(),2100); return; }
-  setTimeout(()=>resetPositions(), 2100);
+  // Extra time gol -> fim imediato (resolvido pelo game loop quando goalAnim chegar a 0)
+  if(S.extraTime){ S.goalPendingResolve=true; }
 }
 
 function resetPositions(){
