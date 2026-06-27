@@ -1,0 +1,1200 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Felipe Futebol Supergol ⚽</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  background: #0a0a1a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  overflow: hidden;
+  touch-action: none;
+}
+canvas {
+  display: block;
+  max-width: 100vw;
+  max-height: 100vh;
+  image-rendering: pixelated;
+}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+// ============================================================
+// FELIPE FUTEBOL SUPERGOL
+// Criado com amor para o Felipe, 6 anos!
+// ============================================================
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const GW = 800, GH = 560;
+canvas.width = GW; canvas.height = GH;
+
+function resize() {
+  const s = Math.min(window.innerWidth / GW, window.innerHeight / GH);
+  canvas.style.width  = (GW * s) + 'px';
+  canvas.style.height = (GH * s) + 'px';
+}
+resize();
+window.addEventListener('resize', resize);
+
+// ============================================================
+// CAMPO E GOLS
+// ============================================================
+const FX=60, FY=70, FW=680, FH=400;
+const FR=FX+FW, FB=FY+FH, FCX=FX+FW/2, FCY=FY+FH/2;
+const GH_GOAL=120, GD=28;
+// Gol esquerdo (Felipe defende) e direito (Felipe ataca)
+const LG={x:FX-GD, y:FCY-GH_GOAL/2, w:GD, h:GH_GOAL};
+const RG={x:FR,    y:FCY-GH_GOAL/2, w:GD, h:GH_GOAL};
+
+// ============================================================
+// CONFIGURAÇÃO DAS FASES
+// ============================================================
+const PHASES=[
+  { name:'Quartas de Final', opp:'Brasil FC',  oc:'#009c3b', oh:'#00cc55', os:85,  gks:0.42, gkSize:1,   trophy:'🥉', tname:'Bronze'  },
+  { name:'Semifinal',        opp:'Palmeiras',  oc:'#005500', oh:'#007700', os:115, gks:0.60, gkSize:1,   trophy:'🥈', tname:'Prata'   },
+  { name:'Grande Final',     opp:'Vasco',      oc:'#111111', oh:'#333333', os:100, gks:0.78, gkSize:1.85,trophy:'🥇', tname:'Ouro', isFinal:true },
+];
+
+// ============================================================
+// ESTADO GLOBAL
+// ============================================================
+let S={
+  screen:'intro',        // intro | howto | phases | match | half | victory | defeat | champ
+  phase:0,
+  unlocked:[true,false,false],
+  trophies:[null,null,null],
+  half:1,
+  time:120,
+  extraTime:false,
+  extraLeft:0,
+  score:{p:0,o:0},
+  coins:0,
+  totalCoins:0,
+  goalAnim:0,
+  goalScorer:'',
+  goalCooldown:0,
+  animate:0,
+};
+
+// ============================================================
+// INPUT
+// ============================================================
+const K={};
+document.addEventListener('keydown', e=>{
+  K[e.code]=true;
+  if(S.screen==='match') onKey(e);
+});
+document.addEventListener('keyup', e=>{ K[e.code]=false; });
+
+const MK={up:false,down:false,left:false,right:false};
+let touchJoy={id:-1,sx:0,sy:0};
+
+function onKey(e){
+  switch(e.code){
+    case 'Space':    e.preventDefault(); doKick();  break;
+    case 'KeyF':     doFireKick();  break;
+    case 'KeyV':     doSpeed();     break;
+    case 'KeyC':     doSlide();     break;
+    case 'KeyP':     doPass();      break;
+  }
+}
+
+// ============================================================
+// ENTIDADES
+// ============================================================
+let P,Ball,Opps,GK,Ref,Coins,Boots,Particles;
+
+function initMatch(){
+  const ph=PHASES[S.phase];
+  S.half=1; S.time=120; S.score={p:0,o:0};
+  S.coins=0; S.extraTime=false; S.goalAnim=0; S.goalCooldown=0;
+
+  // Felipe
+  P={
+    x:FCX-70, y:FCY,
+    vx:0, vy:0, r:15,
+    speed:185,
+    hasBall:true,
+    firePct:1,       // 0..1 (1=pronto)
+    fireTimer:0,
+    speedBoost:0,    // segundos restantes
+    speedCD:0,       // cooldown recarregar
+    slideTimer:0,
+    slideAng:0,
+    kickCD:0,
+    stunTimer:0,
+  };
+
+  // Bola
+  Ball={
+    x:FCX, y:FCY,
+    vx:0, vy:0, r:9,
+    owner:'P',       // 'P' | 'O' | null
+    onFire:false, fireLeft:0,
+    lastKicker:'P',
+  };
+
+  // Adversários (3)
+  Opps=[];
+  for(let i=0;i<3;i++){
+    Opps.push({
+      x: FCX+80+i*55, y: FCY-50+i*50,
+      vx:0,vy:0, r:14,
+      speed:ph.os, hasBall:false,
+      stealCD:0,
+      shootCD:1+i*0.3,
+      color:ph.oc, hi:ph.oh,
+      emj: i===0?'😤':i===1?'😠':'😡',
+    });
+  }
+
+  // Goleiro
+  GK={
+    x:FR-12, y:FCY,
+    vx:0, vy:0,
+    r:14*ph.gkSize,
+    speed:115/ph.gkSize,
+    skill:ph.gks,
+    color:ph.oc, hi:ph.oh,
+    isGiant:ph.gkSize>1.3,
+    hp:100, maxHp:100,
+    saveCD:0,
+  };
+
+  // Juiz Maluco
+  Ref={
+    x:FCX, y:FCY-100,
+    vx:60, vy:40,
+    r:11,
+    mode:'wander', modeT:3,
+    whistleT:5, whistling:false,
+    bounceCD:0,
+  };
+
+  Coins=[]; Boots=[]; Particles=[];
+  spawnCoins(6);
+  spawnBoot();
+}
+
+function spawnCoins(n){
+  for(let i=0;i<n;i++){
+    Coins.push({
+      x: FX+70+Math.random()*(FW-140),
+      y: FY+25+Math.random()*(FH-50),
+      r:8, alive:true, bob:Math.random()*6.28,
+    });
+  }
+}
+
+function spawnBoot(){
+  const types=['fire','speed','gold'];
+  Boots.push({
+    x: FX+70+Math.random()*(FW-140),
+    y: FY+25+Math.random()*(FH-50),
+    r:11, alive:true, type:types[Math.floor(Math.random()*3)],
+    bob:Math.random()*6.28,
+  });
+}
+
+// ============================================================
+// UPDATE
+// ============================================================
+let lastT=0, coinT=7, bootT=18;
+
+function update(dt){
+  S.animate+=dt;
+  if(S.screen!=='match') return;
+
+  // Timers
+  if(S.goalAnim>0){ S.goalAnim-=dt; return; } // pausa animação de gol
+  if(S.goalCooldown>0){ S.goalCooldown-=dt; }
+
+  // Cronômetro
+  if(S.extraTime){
+    S.extraLeft-=dt;
+    if(S.extraLeft<=0){ S.extraLeft=0; resolveExtraTime(); return; }
+  } else {
+    S.time-=dt;
+    if(S.time<=0){ S.time=0; halfOrEnd(); return; }
+  }
+
+  updatePlayer(dt);
+  updateBall(dt);
+  updateOpps(dt);
+  updateGK(dt);
+  updateRef(dt);
+  updateCoins(dt);
+  updateBoots(dt);
+  updateParticles(dt);
+
+  // Spawn periódico
+  coinT-=dt; bootT-=dt;
+  if(coinT<=0){ coinT=5+Math.random()*5; if(Coins.filter(c=>c.alive).length<8) spawnCoins(1); }
+  if(bootT<=0){ bootT=15+Math.random()*10; if(Boots.filter(b=>b.alive).length<2) spawnBoot(); }
+}
+
+function updatePlayer(dt){
+  if(P.stunTimer>0){ P.stunTimer-=dt; return; }
+
+  let dx=0,dy=0;
+  if(K['ArrowLeft']||K['KeyA']||MK.left)  dx-=1;
+  if(K['ArrowRight']||K['KeyD']||MK.right) dx+=1;
+  if(K['ArrowUp']||K['KeyW']||MK.up)    dy-=1;
+  if(K['ArrowDown']||K['KeyS']||MK.down)  dy+=1;
+
+  const len=Math.sqrt(dx*dx+dy*dy);
+  if(len>0){dx/=len;dy/=len;}
+
+  let spd=P.speed;
+  if(P.speedBoost>0){ spd*=1.85; P.speedBoost=Math.max(0,P.speedBoost-dt); }
+
+  if(P.slideTimer>0){
+    P.vx=Math.cos(P.slideAng)*spd*1.5;
+    P.vy=Math.sin(P.slideAng)*spd*1.5;
+    P.slideTimer=Math.max(0,P.slideTimer-dt);
+  } else {
+    P.vx=dx*spd; P.vy=dy*spd;
+  }
+
+  P.x=clamp(P.x+P.vx*dt, FX+P.r, FR-P.r);
+  P.y=clamp(P.y+P.vy*dt, FY+P.r, FB-P.r);
+
+  if(P.hasBall){
+    const ang=(len>0)?Math.atan2(P.vy,P.vx):0;
+    const off=P.r+Ball.r+2;
+    Ball.x= len>0? P.x+Math.cos(ang)*off : P.x+off;
+    Ball.y= len>0? P.y+Math.sin(ang)*off : P.y;
+    Ball.vx=0; Ball.vy=0;
+  }
+
+  // Recarregar fogo
+  if(P.firePct<1) P.firePct=Math.min(1, P.firePct+dt*0.22);
+  // Recarregar velocidade
+  if(P.speedCD>0){ P.speedCD=Math.max(0,P.speedCD-dt); }
+  if(P.kickCD>0) P.kickCD=Math.max(0,P.kickCD-dt);
+}
+
+function doKick(){
+  if(!P.hasBall||P.kickCD>0) return;
+  shootBall(350+Math.random()*60, 0.45, false);
+  P.kickCD=0.45;
+}
+
+function doFireKick(){
+  if(!P.hasBall||P.firePct<1) return;
+  P.firePct=0;
+  shootBall(560, 0.15, true);
+  P.kickCD=0.5;
+  for(let i=0;i<6;i++) addPart(Ball.x,Ball.y,'🔥',0.6);
+}
+
+function doSpeed(){
+  if(P.speedCD>0||P.speedBoost>0) return;
+  P.speedBoost=2.8; P.speedCD=7;
+  for(let i=0;i<3;i++) addPart(P.x-i*12,P.y,'💨',0.45);
+}
+
+function doSlide(){
+  if(P.slideTimer>0) return;
+  const len=Math.sqrt(P.vx*P.vx+P.vy*P.vy);
+  if(len<20) return;
+  P.slideAng=Math.atan2(P.vy,P.vx);
+  P.slideTimer=0.38;
+  addPart(P.x,P.y,'💨',0.4);
+  // Roubar bola no carrinho
+  Opps.forEach(o=>{
+    if(dist(P.x,P.y,o.x,o.y)<P.r+o.r+12 && o.hasBall){
+      o.hasBall=false; Ball.owner=null;
+      Ball.vx=Math.cos(P.slideAng)*220; Ball.vy=Math.sin(P.slideAng)*220;
+      addPart(o.x,o.y,'⭐',0.5);
+    }
+  });
+}
+
+function doPass(){
+  if(!P.hasBall) return;
+  P.hasBall=false; Ball.owner=null;
+  Ball.vx=160; Ball.vy=(Math.random()-0.5)*80;
+  Ball.lastKicker='P';
+}
+
+function shootBall(spd, spread, fire){
+  P.hasBall=false; Ball.owner=null;
+  const tx=RG.x+RG.w/2;
+  const ty=RG.y+RG.h/2+(Math.random()-0.5)*RG.h*spread*2;
+  const dx=tx-Ball.x, dy=ty-Ball.y;
+  const l=Math.sqrt(dx*dx+dy*dy)||1;
+  Ball.vx=(dx/l)*spd; Ball.vy=(dy/l)*spd;
+  Ball.onFire=fire; Ball.fireLeft=fire?2.2:0;
+  Ball.lastKicker='P';
+}
+
+function updateBall(dt){
+  if(P.hasBall) return;
+  if(Opps.some(o=>o.hasBall)) return;
+
+  Ball.x+=Ball.vx*dt; Ball.y+=Ball.vy*dt;
+  Ball.vx*=0.975; Ball.vy*=0.975;
+
+  // Bounce paredes top/bot
+  if(Ball.y-Ball.r<FY){ Ball.y=FY+Ball.r; Ball.vy=Math.abs(Ball.vy)*0.65; }
+  if(Ball.y+Ball.r>FB){ Ball.y=FB-Ball.r; Ball.vy=-Math.abs(Ball.vy)*0.65; }
+
+  // Parede esquerda e gol esquerdo
+  if(Ball.x-Ball.r<FX){
+    if(inGoal(Ball.y,LG) && S.goalCooldown<=0){ triggerGoal('O'); return; }
+    else { Ball.x=FX+Ball.r; Ball.vx=Math.abs(Ball.vx)*0.65; }
+  }
+  // Parede direita e gol direito
+  if(Ball.x+Ball.r>FR){
+    if(inGoal(Ball.y,RG) && S.goalCooldown<=0){ triggerGoal('P'); return; }
+    else { Ball.x=FR-Ball.r; Ball.vx=-Math.abs(Ball.vx)*0.65; }
+  }
+  // Gol realmente dentro (passou a profundidade)
+  if(Ball.x<LG.x && inGoal(Ball.y,LG) && S.goalCooldown<=0){ triggerGoal('O'); return; }
+  if(Ball.x>RG.x+RG.w && inGoal(Ball.y,RG) && S.goalCooldown<=0){ triggerGoal('P'); return; }
+
+  // Felipe pega bola
+  if(!P.hasBall && P.kickCD<=0 && dist(Ball.x,Ball.y,P.x,P.y)<P.r+Ball.r+4){
+    takeBall('P');
+  }
+  // Adversário pega bola
+  Opps.forEach(o=>{
+    if(!o.hasBall && !P.hasBall && dist(Ball.x,Ball.y,o.x,o.y)<o.r+Ball.r+3){
+      takeBall('O',o);
+    }
+  });
+
+  // Fogo
+  if(Ball.onFire){
+    Ball.fireLeft-=dt;
+    if(Ball.fireLeft<=0) Ball.onFire=false;
+    if(Math.random()<0.25) addPart(Ball.x,Ball.y,'🔥',0.25);
+  }
+}
+
+function inGoal(y,g){ return y>g.y && y<g.y+g.h; }
+
+function takeBall(who, opp){
+  Opps.forEach(o=>o.hasBall=false);
+  P.hasBall=false; Ball.owner=who;
+  if(who==='P'){ P.hasBall=true; }
+  else if(opp){ opp.hasBall=true; }
+  Ball.vx=0; Ball.vy=0;
+}
+
+function triggerGoal(scorer){
+  if(scorer==='P') S.score.p++;
+  else             S.score.o++;
+  S.goalScorer=scorer;
+  S.goalAnim=2.0;
+  S.goalCooldown=3;
+  // Partículas de celebração
+  if(scorer==='P'){
+    for(let i=0;i<10;i++) addPart(RG.x+Math.random()*30, RG.y+Math.random()*RG.h, ['⭐','🎉','✨','🎊'][i%4], 1.5);
+  } else {
+    addPart(LG.x+15, LG.y+LG.h/2, '😱', 1.2);
+  }
+  // Extra time gol -> fim imediato
+  if(S.extraTime){ setTimeout(()=>resolveExtraTime(),2100); return; }
+  setTimeout(()=>resetPositions(), 2100);
+}
+
+function resetPositions(){
+  P.x=FCX-70; P.y=FCY; P.hasBall=true; P.vx=0; P.vy=0;
+  Ball.x=FCX; Ball.y=FCY; Ball.vx=0; Ball.vy=0; Ball.onFire=false; Ball.owner='P';
+  Opps.forEach((o,i)=>{ o.x=FCX+80+i*55; o.y=FCY-50+i*50; o.hasBall=false; });
+}
+
+function updateOpps(dt){
+  Opps.forEach(o=>{
+    o.stealCD=Math.max(0,o.stealCD-dt);
+    o.shootCD=Math.max(0,o.shootCD-dt);
+
+    if(o.hasBall){
+      // Avança para o gol do Felipe
+      const tx=LG.x+LG.w+5, ty=LG.y+LG.h/2;
+      const dx=tx-o.x, dy=ty-o.y;
+      const l=Math.sqrt(dx*dx+dy*dy)||1;
+      o.vx=(dx/l)*o.speed; o.vy=(dy/l)*o.speed;
+      const ang=Math.atan2(o.vy,o.vx);
+      Ball.x=o.x+Math.cos(ang)*(o.r+Ball.r+2);
+      Ball.y=o.y+Math.sin(ang)*(o.r+Ball.r+2);
+
+      // Chuta se perto do gol
+      if(l<160 && o.shootCD<=0){
+        o.hasBall=false; Ball.owner=null;
+        const sa=Math.atan2(ty-Ball.y,tx-Ball.x)+(Math.random()-0.5)*0.35;
+        Ball.vx=Math.cos(sa)*260; Ball.vy=Math.sin(sa)*260;
+        Ball.lastKicker='O';
+        o.shootCD=1.2;
+      }
+    } else {
+      // Corre para a bola ou para Felipe com bola
+      let tx=Ball.x, ty=Ball.y;
+      if(P.hasBall){ tx=P.x; ty=P.y; }
+      const dx=tx-o.x, dy=ty-o.y;
+      const l=Math.sqrt(dx*dx+dy*dy)||1;
+      o.vx=(dx/l)*o.speed; o.vy=(dy/l)*o.speed;
+
+      // Roubar bola de Felipe
+      if(P.hasBall && o.stealCD<=0 && dist(o.x,o.y,P.x,P.y)<o.r+P.r+5 && P.slideTimer<=0 && P.stunTimer<=0){
+        const chance=0.25+S.phase*0.08;
+        if(Math.random()<chance*dt*4){
+          P.hasBall=false; o.hasBall=true; Ball.owner='O';
+          o.stealCD=0.8;
+          addPart(o.x,o.y,'⭐',0.4);
+        }
+      }
+    }
+
+    o.x=clamp(o.x+o.vx*dt, FX+o.r, FR-o.r-40);
+    o.y=clamp(o.y+o.vy*dt, FY+o.r, FB-o.r);
+  });
+}
+
+function updateGK(dt){
+  GK.saveCD=Math.max(0,GK.saveCD-dt);
+  // Segue a bola no eixo Y
+  const dy=Ball.y-GK.y;
+  let spd=GK.speed;
+  if(GK.isGiant && GK.hp<50) spd*=0.6;
+  if(Math.abs(dy)>4) GK.vy=Math.sign(dy)*spd;
+  else GK.vy=0;
+  GK.y=clamp(GK.y+GK.vy*dt, RG.y+GK.r, RG.y+RG.h-GK.r);
+  GK.x=FR-12;
+
+  // Defesa
+  if(GK.saveCD<=0 && Ball.owner===null && !P.hasBall){
+    const d=dist(GK.x,GK.y,Ball.x,Ball.y);
+    if(d<GK.r+Ball.r+12){
+      let sc=GK.skill;
+      if(Ball.onFire) sc*=0.35;
+      if(GK.isGiant && GK.hp<50) sc*=0.7;
+
+      if(Math.random()<sc){
+        // Defesa!
+        if(Ball.onFire && GK.isGiant){ GK.hp=Math.max(0,GK.hp-28); addPart(GK.x,GK.y,'💥',0.7); }
+        Ball.vx=-300; Ball.vy=(Math.random()-0.5)*200;
+        Ball.onFire=false; Ball.owner=null;
+        addPart(GK.x,GK.y,'🧤',0.5);
+      }
+      GK.saveCD=0.6;
+    }
+  }
+}
+
+function updateRef(dt){
+  Ref.modeT-=dt;
+  if(Ref.modeT<=0){
+    Ref.mode=Math.random()<0.25?'chase':'wander';
+    Ref.modeT=2+Math.random()*3;
+    if(Ref.mode==='wander'){ Ref.vx=(Math.random()-0.5)*130; Ref.vy=(Math.random()-0.5)*130; }
+  }
+  if(Ref.mode==='chase'){
+    const dx=P.x-Ref.x, dy=P.y-Ref.y, l=Math.sqrt(dx*dx+dy*dy)||1;
+    Ref.vx=(dx/l)*105; Ref.vy=(dy/l)*105;
+  }
+
+  Ref.x+=Ref.vx*dt; Ref.y+=Ref.vy*dt;
+  // Bounce
+  if(Ref.x<FX+15){Ref.vx=Math.abs(Ref.vx);Ref.x=FX+15;}
+  if(Ref.x>FR-15){Ref.vx=-Math.abs(Ref.vx);Ref.x=FR-15;}
+  if(Ref.y<FY+15){Ref.vy=Math.abs(Ref.vy);Ref.y=FY+15;}
+  if(Ref.y>FB-15){Ref.vy=-Math.abs(Ref.vy);Ref.y=FB-15;}
+
+  // Colisão com Felipe (atordoa brevemente)
+  if(dist(Ref.x,Ref.y,P.x,P.y)<Ref.r+P.r+2){
+    P.stunTimer=0.3;
+    Ref.vx*=-0.7; Ref.vy*=-0.7;
+    addPart(Ref.x,Ref.y,'😵',0.4);
+  }
+  // Deflecte bola
+  if(Ball.owner===null && dist(Ref.x,Ref.y,Ball.x,Ball.y)<Ref.r+Ball.r){
+    Ball.vx=-Ball.vx*0.4+(Math.random()-0.5)*40;
+    Ball.vy=-Ball.vy*0.4+(Math.random()-0.5)*40;
+    addPart(Ref.x,Ref.y,'😱',0.4);
+  }
+
+  // Apito aleatório
+  Ref.whistleT-=dt;
+  if(Ref.whistleT<=0){ Ref.whistleT=4+Math.random()*5; Ref.whistling=true; addPart(Ref.x,Ref.y-18,'📣',0.9); setTimeout(()=>Ref.whistling=false,800); }
+}
+
+function updateCoins(dt){
+  Coins.forEach(c=>{ if(!c.alive)return; c.bob+=dt*3;
+    if(dist(c.x,c.y,P.x,P.y)<c.r+P.r){ c.alive=false; S.coins++; S.totalCoins++; addPart(c.x,c.y,'🪙',0.55); }
+  });
+}
+
+function updateBoots(dt){
+  const fx={fire:()=>{P.firePct=1; addPart(P.x,P.y,'🔥',0.8);},
+             speed:()=>{P.speedBoost=Math.max(P.speedBoost,4); P.speedCD=8; addPart(P.x,P.y,'⚡',0.8);},
+             gold:()=>{P.firePct=1; P.speedBoost=Math.max(P.speedBoost,2); addPart(P.x,P.y,'⭐',0.9);}};
+  Boots.forEach(b=>{ if(!b.alive)return; b.bob+=dt*2;
+    if(dist(b.x,b.y,P.x,P.y)<b.r+P.r){ b.alive=false; fx[b.type](); }
+  });
+}
+
+function updateParticles(dt){
+  for(let i=Particles.length-1;i>=0;i--){
+    const p=Particles[i]; p.life-=dt; p.x+=p.vx*dt; p.y+=p.vy*dt; p.vy-=55*dt;
+    if(p.life<=0) Particles.splice(i,1);
+  }
+}
+
+function addPart(x,y,txt,life){
+  Particles.push({x,y,txt,life,maxL:life,vx:(Math.random()-0.5)*55,vy:-35-Math.random()*35});
+}
+
+// ============================================================
+// LÓGICA DE FASE / TEMPO
+// ============================================================
+function halfOrEnd(){
+  if(S.half===1){ state_halftime(); }
+  else { endMatch(); }
+}
+
+function state_halftime(){ S.screen='half'; }
+
+function startSecondHalf(){
+  S.half=2; S.time=120; S.screen='match';
+  resetPositions();
+}
+
+function endMatch(){
+  if(S.score.p>S.score.o){ winMatch(); }
+  else if(S.score.p===S.score.o && !S.extraTime){
+    S.extraTime=true; S.extraLeft=30; // Prorrogação!
+  } else { S.screen='defeat'; }
+}
+
+function resolveExtraTime(){
+  S.extraTime=false;
+  if(S.score.p>=S.score.o){ winMatch(); }
+  else { // Felipe ganha cobrança de fogo (sempre vence na prorrogação para crianças!)
+    S.score.p++; winMatch();
+  }
+}
+
+function winMatch(){
+  S.trophies[S.phase]=PHASES[S.phase].trophy;
+  if(S.phase+1<3) S.unlocked[S.phase+1]=true;
+  if(S.phase===2) S.screen='champ';
+  else S.screen='victory';
+}
+
+// ============================================================
+// RENDER
+// ============================================================
+function render(){
+  ctx.clearRect(0,0,GW,GH);
+  switch(S.screen){
+    case 'intro':   drawIntro();   break;
+    case 'howto':   drawHowTo();   break;
+    case 'phases':  drawPhases();  break;
+    case 'match':   drawMatch();   break;
+    case 'half':    drawHalf();    break;
+    case 'victory': drawVictory(); break;
+    case 'defeat':  drawDefeat();  break;
+    case 'champ':   drawChamp();   break;
+  }
+}
+
+// ---- Tela Inicial ----
+function drawIntro(){
+  bgGrad('#0f3460','#16213e');
+
+  // Estrelas animadas
+  for(let i=0;i<20;i++){
+    const bx=((i*137+50)%GW), by=((i*71+20)%70);
+    ctx.font='10px Arial'; ctx.fillStyle=`rgba(255,255,180,${0.4+0.4*Math.sin(S.animate*2+i)})`;
+    ctx.textAlign='center'; ctx.fillText('★',bx,by);
+  }
+
+  // Bola animada
+  const bx=GW/2+Math.cos(S.animate)*40, by=260+Math.sin(S.animate*1.5)*15;
+  ctx.font='50px Arial'; ctx.textAlign='center'; ctx.fillText('⚽',bx,by);
+
+  ctx.textAlign='center';
+  ctx.font='bold 54px Arial'; ctx.fillStyle='#ffd700';
+  shadow('#ff6600',25); ctx.fillText('Felipe',GW/2,120); shadow('',0);
+  ctx.font='bold 42px Arial'; ctx.fillStyle='#ff8800';
+  shadow('#ff3300',15); ctx.fillText('Futebol Supergol!',GW/2,172); shadow('',0);
+
+  ctx.font='18px Arial'; ctx.fillStyle='#aaddff';
+  ctx.fillText('A Copa dos Sonhos está começando! 🏆',GW/2,215);
+
+  btn(GW/2,310,210,54,'#00aa33','#00ee55','▶ JOGAR');
+  btn(GW/2,380,210,46,'#1a44aa','#2255cc','📖 Como Jogar');
+  btn(GW/2,442,210,46,'#996600','#ccaa00','🏆 Troféus');
+
+  // Troféus ganhos
+  if(S.trophies[0]||S.trophies[1]||S.trophies[2]){
+    ctx.font='28px Arial';
+    let tx=GW-140;
+    if(S.trophies[0]){ctx.fillText('🥉',tx,50);tx+=38;}
+    if(S.trophies[1]){ctx.fillText('🥈',tx,50);tx+=38;}
+    if(S.trophies[2]){ctx.fillText('🥇',tx,50);}
+  }
+}
+
+// ---- Como Jogar ----
+function drawHowTo(){
+  bgGrad('#0a2a0a','#071207');
+  ctx.textAlign='center'; ctx.font='bold 36px Arial'; ctx.fillStyle='#ffd700';
+  ctx.fillText('📖 Como Jogar',GW/2,55);
+
+  const lines=[
+    ['🕹️ Mover','Setas do teclado ou WASD'],
+    ['⚽ Chutar','Tecla Espaço'],
+    ['🔥 Chute de Fogo','Tecla F — chuta com fogo!'],
+    ['⚡ Supervelocidade','Tecla V — corre super rápido!'],
+    ['💨 Carrinho','Tecla C — rouba a bola!'],
+    ['🎯 Passar','Tecla P'],
+    ['',''],
+    ['🪙 Moedas','Colete moedas espalhadas no campo!'],
+    ['👟 Chuteiras','Pegue poderes especiais!'],
+    ['🤪 Juiz Maluco','Ele atrapalha — desvie dele!'],
+    ['👹 Goleiro Gigante','Use o Chute de Fogo para enfraquecer!'],
+  ];
+
+  ctx.textAlign='left';
+  let y=100;
+  for(const [a,b] of lines){
+    if(!a){y+=20;continue;}
+    ctx.font='bold 17px Arial'; ctx.fillStyle='#ffd700'; ctx.fillText(a,70,y);
+    ctx.font='17px Arial'; ctx.fillStyle='#cceeff'; ctx.fillText(b,280,y);
+    y+=35;
+  }
+
+  ctx.textAlign='center';
+  btn(GW/2,510,200,44,'#cc2200','#ff3300','← Voltar');
+}
+
+// ---- Seleção de Fases ----
+function drawPhases(){
+  bgGrad('#0a0a2a','#070715');
+  ctx.textAlign='center'; ctx.font='bold 36px Arial'; ctx.fillStyle='#ffd700';
+  ctx.fillText('🏆 Copa Supergol',GW/2,55);
+  ctx.font='18px Arial'; ctx.fillStyle='#aaddff';
+  ctx.fillText('Escolha a fase para jogar:',GW/2,88);
+
+  const ys=[150,280,420];
+  const emojis=['⚽','🌿','⚫'];
+  for(let i=0;i<3;i++){
+    const ph=PHASES[i], locked=!S.unlocked[i], cy=ys[i];
+    const tr=S.trophies[i];
+    // Card
+    rRect(GW/2-285,cy-55,570,108,12, locked?'#181825':'#0e2a1a');
+    ctx.strokeStyle=locked?'#444':'#00cc66'; ctx.lineWidth=2;
+    rRectS(GW/2-285,cy-55,570,108,12);
+
+    ctx.textAlign='left';
+    ctx.font='bold 22px Arial'; ctx.fillStyle=locked?'#666':'#ffffff';
+    ctx.fillText((locked?'🔒 ':emojis[i]+' ')+ph.name, GW/2-265, cy-18);
+    ctx.font='16px Arial'; ctx.fillStyle=locked?'#555':'#99ddff';
+    ctx.fillText('vs '+ph.opp+(ph.isFinal?' — Goleiro Gigante 👹':''), GW/2-265, cy+14);
+    ctx.font='13px Arial'; ctx.fillStyle=locked?'#444':'#ffcc66';
+    ctx.fillText(i===0?'Dificuldade: Fácil ⭐':i===1?'Dificuldade: Média ⭐⭐':'Dificuldade: Chefão ⭐⭐⭐', GW/2-265, cy+40);
+
+    if(tr){ ctx.textAlign='right'; ctx.font='38px Arial'; ctx.fillText(tr, GW/2+270, cy+18); }
+    ctx.textAlign='center';
+  }
+  btn(GW/2,515,200,40,'#cc2200','#ff3300','← Voltar');
+}
+
+// ---- Partida ----
+function drawMatch(){
+  drawField();
+  drawCoins(); drawBoots();
+  // Juiz
+  drawChar(Ref.x,Ref.y,Ref.r,'#ddcc00','#ffee33',Ref.whistling?'😤':'🤪');
+  // Adversários
+  Opps.forEach(o=>drawChar(o.x,o.y,o.r,o.color,o.hi,o.emj));
+  // Goleiro
+  drawChar(GK.x,GK.y,GK.r,GK.color,GK.hi,GK.isGiant?'👹':'🧤');
+  if(GK.isGiant) drawHPBar(GK.x-35,GK.y-GK.r-18,70,10,GK.hp/GK.maxHp);
+  // Felipe
+  drawFelipe();
+  // Bola
+  drawBall();
+  drawParticles();
+  // HUD
+  drawHUD();
+  // Animação de gol
+  if(S.goalAnim>0) drawGoalAnim();
+  // Indicador de prorrogação
+  if(S.extraTime){
+    ctx.textAlign='center'; ctx.font='bold 20px Arial';
+    ctx.fillStyle=`rgba(255,80,0,${0.7+0.3*Math.sin(S.animate*8)})`;
+    ctx.fillText(`⏰ PRORROGAÇÃO! ${Math.ceil(S.extraLeft)}s — Próximo gol vence!`, GW/2, FY-8);
+  }
+}
+
+function drawField(){
+  // Estádio fundo
+  ctx.fillStyle='#6b0000'; ctx.fillRect(0,0,GW,GH);
+  // Torcida
+  ctx.font='10px Arial'; ctx.textAlign='center';
+  for(let i=0;i<28;i++){
+    const bx=(i*29+10)%GW, by=12+Math.sin(i+S.animate*2)*4;
+    ctx.fillStyle=['#ffaa00','#ff5500','#ffffff','#ffdd00','#ff8800'][i%5];
+    ctx.fillText(['👤','🙋','🤸','👏','🎉'][i%5],bx,by);
+  }
+  for(let i=0;i<28;i++){
+    const bx=(i*29+10)%GW, by=GH-16+Math.sin(i+1+S.animate*2)*4;
+    ctx.fillStyle=['#ffaa00','#ff5500','#ffffff','#ffdd00','#ff8800'][i%5];
+    ctx.fillText(['👤','🙋','🤸','👏','🎉'][i%5],bx,by);
+  }
+
+  // Campo gramado com listras
+  ctx.fillStyle='#2d8a2d'; ctx.fillRect(FX,FY,FW,FH);
+  ctx.fillStyle='#2a7d2a';
+  for(let i=0;i<8;i+=2) ctx.fillRect(FX+i*(FW/8),FY,FW/8,FH);
+
+  // Linhas
+  ctx.strokeStyle='rgba(255,255,255,0.85)'; ctx.lineWidth=2.5;
+  ctx.strokeRect(FX,FY,FW,FH);
+  line(FCX,FY,FCX,FB);
+  ctx.beginPath(); ctx.arc(FCX,FCY,52,0,Math.PI*2); ctx.stroke();
+  dot(FCX,FCY,4,'#fff');
+
+  // Áreas
+  ctx.strokeStyle='rgba(255,255,255,0.55)'; ctx.lineWidth=1.5;
+  ctx.strokeRect(FX,FCY-80,62,160);
+  ctx.strokeRect(FR-62,FCY-80,62,160);
+
+  // Pontos de pênalti
+  dot(FX+85,FCY,4,'#fff'); dot(FR-85,FCY,4,'#fff');
+
+  // Gols
+  ctx.fillStyle='rgba(200,200,200,0.35)'; ctx.fillRect(LG.x,LG.y,LG.w,LG.h);
+  ctx.fillRect(RG.x,RG.y,RG.w,RG.h);
+  ctx.strokeStyle='#ffffff'; ctx.lineWidth=2.5;
+  ctx.strokeRect(LG.x,LG.y,LG.w,LG.h);
+  ctx.strokeRect(RG.x,RG.y,RG.w,RG.h);
+
+  // Rótulos dos gols
+  ctx.font='10px Arial'; ctx.fillStyle='rgba(255,255,255,0.5)'; ctx.textAlign='center';
+  ctx.fillText('SEU\nGOL',LG.x+LG.w/2,LG.y-6);
+  ctx.fillText('ATAQUE\nAQUI →',FR+1,FCY-6);
+}
+
+function drawFelipe(){
+  const fireOn=P.speedBoost>0;
+  const bc=fireOn?'#0088ff':'#ff6600', hi=fireOn?'#55ccff':'#ffbb44';
+  if(P.slideTimer>0){
+    ctx.save(); ctx.translate(P.x,P.y); ctx.rotate(P.slideAng);
+    ctx.fillStyle=bc; ctx.beginPath(); ctx.ellipse(0,0,P.r*1.4,P.r*0.6,0,0,Math.PI*2); ctx.fill();
+    ctx.font='16px Arial'; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText('😎',0,0);
+    ctx.textBaseline='alphabetic'; ctx.restore();
+    return;
+  }
+  drawChar(P.x,P.y,P.r,bc,hi,'😄');
+  if(fireOn){
+    ctx.font='14px Arial'; ctx.textAlign='center';
+    ctx.fillText('💨',P.x-22,P.y+4); ctx.fillText('💨',P.x-36,P.y-4);
+  }
+  // Indicador de bola
+  if(P.hasBall){
+    ctx.strokeStyle='rgba(255,220,0,0.7)'; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.arc(P.x,P.y,P.r+4,0,Math.PI*2); ctx.stroke();
+  }
+}
+
+function drawChar(x,y,r,bc,hi,emj){
+  // Sombra
+  ctx.fillStyle='rgba(0,0,0,0.28)';
+  ctx.beginPath(); ctx.ellipse(x,y+r,r*0.75,r*0.28,0,0,Math.PI*2); ctx.fill();
+  // Corpo
+  ctx.fillStyle=bc; ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
+  // Brilho
+  ctx.fillStyle=hi; ctx.beginPath(); ctx.arc(x-r*0.28,y-r*0.28,r*0.28,0,Math.PI*2); ctx.fill();
+  // Emoji
+  ctx.font=`${r*1.25}px Arial`; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(emj,x,y); ctx.textBaseline='alphabetic';
+}
+
+function drawBall(){
+  const x=Ball.x,y=Ball.y;
+  if(Ball.onFire){ ctx.font='18px Arial'; ctx.textAlign='center'; ctx.fillText('🔥',x,y-Ball.r-2); shadow('#ff6600',18); }
+  // Sombra
+  ctx.fillStyle='rgba(0,0,0,0.28)';
+  ctx.beginPath(); ctx.ellipse(x,y+Ball.r,Ball.r*0.7,Ball.r*0.26,0,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle=Ball.onFire?'#ff7700':'#ffffff';
+  ctx.beginPath(); ctx.arc(x,y,Ball.r,0,Math.PI*2); ctx.fill();
+  ctx.font=`${Ball.r*1.8}px Arial`; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText('⚽',x,y); ctx.textBaseline='alphabetic';
+  shadow('',0);
+}
+
+function drawCoins(){
+  Coins.forEach(c=>{ if(!c.alive)return;
+    const by=Math.sin(c.bob)*3;
+    ctx.font='20px Arial'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText('🪙',c.x,c.y+by); ctx.textBaseline='alphabetic';
+  });
+}
+
+function drawBoots(){
+  const em={fire:'🔥👟',speed:'⚡👟',gold:'⭐👟'};
+  Boots.forEach(b=>{ if(!b.alive)return;
+    const by=Math.sin(b.bob)*4;
+    ctx.font='20px Arial'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(em[b.type],b.x,b.y+by); ctx.textBaseline='alphabetic';
+  });
+}
+
+function drawParticles(){
+  Particles.forEach(p=>{
+    ctx.globalAlpha=Math.max(0,p.life/p.maxL);
+    ctx.font='20px Arial'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(p.txt,p.x,p.y); ctx.textBaseline='alphabetic';
+  });
+  ctx.globalAlpha=1;
+}
+
+function drawHUD(){
+  const ph=PHASES[S.phase];
+  // Barra HUD
+  ctx.fillStyle='rgba(0,0,0,0.72)';
+  rRect(8,2,GW-16,60,8,'rgba(0,0,0,0.72)');
+
+  // Placar
+  ctx.textAlign='center'; ctx.font='bold 22px Arial'; ctx.fillStyle='#ffffff';
+  ctx.fillText(`Felipe FC ${S.score.p} × ${S.score.o} ${ph.opp}`,GW/2,28);
+
+  // Tempo
+  const t=S.extraTime?S.extraLeft:S.time;
+  const tstr=`${Math.floor(t/60)}:${String(Math.floor(t)%60).padStart(2,'0')}`;
+  ctx.font='15px Arial';
+  ctx.fillStyle=t<30?'#ff5555':'#aaddff';
+  ctx.fillText(`⏱ ${tstr}  |  ${S.half}º Tempo`,GW/2,50);
+
+  // Moedas
+  ctx.textAlign='left'; ctx.font='bold 17px Arial'; ctx.fillStyle='#ffd700';
+  ctx.fillText(`🪙 ${S.coins}`,18,28);
+
+  // Poderes
+  ctx.textAlign='right'; ctx.font='15px Arial';
+  const fr=P.firePct>=1;
+  ctx.fillStyle=fr?'#ff6600':'#666'; ctx.fillText(fr?'🔥 PRONTO! (F)':`🔥 ${Math.floor(P.firePct*100)}%`,GW-12,28);
+  const sr=P.speedCD<=0||P.speedBoost>0;
+  ctx.fillStyle=P.speedBoost>0?'#00ddff':sr?'#00aaff':'#555';
+  ctx.fillText(P.speedBoost>0?`⚡ ${P.speedBoost.toFixed(1)}s`:sr?'⚡ PRONTO! (V)':'⚡ Recarga...',GW-12,50);
+
+  // Botões mobile (na tela sempre visível)
+  drawMobileHint();
+}
+
+function drawMobileHint(){
+  // Joystick virtual (área)
+  ctx.fillStyle='rgba(255,255,255,0.04)';
+  ctx.beginPath(); ctx.arc(90,GH-55,45,0,Math.PI*2); ctx.fill();
+  ctx.strokeStyle='rgba(255,255,255,0.12)'; ctx.lineWidth=1.5;
+  ctx.beginPath(); ctx.arc(90,GH-55,45,0,Math.PI*2); ctx.stroke();
+  ctx.font='11px Arial'; ctx.fillStyle='rgba(255,255,255,0.25)'; ctx.textAlign='center';
+  ctx.fillText('MOVER',90,GH-50);
+
+  // Botões de ação
+  const btns2=[
+    {x:GW-140,y:GH-55,r:27,em:'⚽',lbl:'CHUTAR'},
+    {x:GW-72, y:GH-75,r:22,em:'🔥',lbl:'FOGO'},
+    {x:GW-72, y:GH-30,r:22,em:'💨',lbl:'SLIDE'},
+    {x:GW-205,y:GH-65,r:22,em:'⚡',lbl:'VEL'},
+  ];
+  btns2.forEach(b=>{
+    ctx.fillStyle='rgba(0,0,0,0.45)';
+    ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle='rgba(255,255,255,0.2)'; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,Math.PI*2); ctx.stroke();
+    ctx.font=`${b.r}px Arial`; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(b.em,b.x,b.y); ctx.textBaseline='alphabetic';
+  });
+}
+
+function drawGoalAnim(){
+  const a=S.goalAnim/2;
+  ctx.fillStyle=`rgba(0,0,0,${0.55*(1-a*0.3)})`;
+  ctx.fillRect(0,0,GW,GH);
+  ctx.textAlign='center';
+  ctx.font=`bold ${Math.floor(56+8*Math.sin(S.animate*12))}px Arial`;
+  const pct=S.goalAnim/2;
+  if(S.goalScorer==='P'){
+    shadow('#ff6600',30);
+    ctx.fillStyle='#ffd700'; ctx.fillText('GOOOOOL! ⚽🔥',GW/2,GH/2-20);
+    ctx.font='28px Arial'; ctx.fillStyle='#aaffaa'; shadow('',0);
+    ctx.fillText('Felipe marcou! 🎉',GW/2,GH/2+40);
+  } else {
+    ctx.fillStyle='#ff4444'; ctx.fillText('Gol do adversário 😢',GW/2,GH/2-10);
+    ctx.font='24px Arial'; ctx.fillStyle='#ffbb88'; shadow('',0);
+    ctx.fillText('Não desiste! Vai para o ataque!',GW/2,GH/2+40);
+  }
+}
+
+function drawHPBar(x,y,w,h,pct){
+  ctx.fillStyle='#333'; ctx.fillRect(x,y,w,h);
+  ctx.fillStyle=pct>0.5?'#00cc00':pct>0.25?'#cccc00':'#cc0000';
+  ctx.fillRect(x,y,w*pct,h);
+  ctx.strokeStyle='#fff'; ctx.lineWidth=1; ctx.strokeRect(x,y,w,h);
+  ctx.textAlign='center'; ctx.font='9px Arial'; ctx.fillStyle='#fff';
+  ctx.fillText('👹 HP',x+w/2,y-2);
+}
+
+// ---- Intervalo ----
+function drawHalf(){
+  bgGrad('#0a2a0a','#081208');
+  ctx.textAlign='center';
+  ctx.font='bold 48px Arial'; ctx.fillStyle='#ffd700';
+  shadow('#ff8800',18); ctx.fillText('⏸️ Intervalo!',GW/2,160); shadow('',0);
+  ctx.font='26px Arial'; ctx.fillStyle='#ffffff';
+  ctx.fillText(`Felipe FC ${S.score.p} × ${S.score.o} ${PHASES[S.phase].opp}`,GW/2,230);
+  ctx.font='19px Arial'; ctx.fillStyle='#aaddff';
+  ctx.fillText('Prepare-se para o segundo tempo!',GW/2,278);
+  ctx.fillStyle='#ffd700'; ctx.fillText(`🪙 Moedas: ${S.coins}`,GW/2,318);
+  ctx.font='16px Arial'; ctx.fillStyle='#88ff88';
+  ctx.fillText('💡 Dica: Use o Chute de Fogo (F) para surpreender o goleiro!',GW/2,360);
+  btn(GW/2,440,230,56,'#00aa33','#00ee55','▶ SEGUNDO TEMPO!');
+}
+
+// ---- Vitória ----
+function drawVictory(){
+  bgGrad('#082008','#040c04');
+  ctx.textAlign='center';
+  const bx=GW/2+Math.cos(S.animate)*10, by=90+Math.sin(S.animate*1.5)*6;
+  ctx.font='55px Arial'; ctx.fillText('🏆',bx,by);
+
+  ctx.font='bold 44px Arial'; ctx.fillStyle='#ffd700';
+  shadow('#ff6600',18); ctx.fillText('GOLAAAAÇO!!',GW/2,175); shadow('',0);
+  ctx.font='26px Arial'; ctx.fillStyle='#ffffff';
+  ctx.fillText(`Felipe venceu o ${PHASES[S.phase].opp}! 🎉`,GW/2,230);
+
+  const tr=PHASES[S.phase].trophy;
+  ctx.font='64px Arial'; ctx.fillText(tr,GW/2,315);
+  ctx.font='22px Arial'; ctx.fillStyle='#ffd700';
+  ctx.fillText(`Troféu de ${PHASES[S.phase].tname} conquistado!`,GW/2,372);
+  ctx.font='17px Arial'; ctx.fillStyle='#aaddff';
+  ctx.fillText(`🪙 Moedas coletadas: ${S.coins}`,GW/2,405);
+
+  const nxt=S.phase<2?'▶ PRÓXIMA FASE':'▶ VER CAMPEÃO!';
+  btn(GW/2,470,240,54,'#00aa33','#00ee55',nxt);
+}
+
+// ---- Derrota ----
+function drawDefeat(){
+  bgGrad('#280808','#140404');
+  ctx.textAlign='center';
+  ctx.font='52px Arial'; ctx.fillText('😢',GW/2,110);
+  ctx.font='bold 36px Arial'; ctx.fillStyle='#ff5555';
+  ctx.fillText('Foi quase, Felipe!',GW/2,190);
+  ctx.font='22px Arial'; ctx.fillStyle='#ffffff';
+  ctx.fillText(`Placar: ${S.score.p} × ${S.score.o}`,GW/2,245);
+  ctx.font='18px Arial'; ctx.fillStyle='#ffbb66';
+  ctx.fillText('💡 Use o Chute de Fogo (F) para fazer gol!',GW/2,295);
+  ctx.fillText('⚡ A Supervelocidade (V) ajuda a passar os adversários!',GW/2,328);
+  ctx.fillText('👟 Pegue as chuteiras especiais no campo!',GW/2,361);
+  btn(GW/2,420,230,54,'#bb7700','#ffaa00','🔄 TENTAR DE NOVO');
+  btn(GW/2,490,200,44,'#aa2200','#ee3300','🏠 Menu');
+}
+
+// ---- Campeão ----
+function drawChamp(){
+  bgGrad('#181800','#080800');
+  // Confetes
+  const em2=['⭐','🎉','🏆','✨','🎊','🌟','🥇','⚽','🔥','💫'];
+  for(let i=0;i<14;i++){
+    const cx=((i*61+30)%GW), cy=((i*43+20+S.animate*20*((i%3)-1))%120)+10;
+    ctx.font='22px Arial'; ctx.textAlign='center'; ctx.fillText(em2[i%10],cx,cy);
+  }
+
+  ctx.textAlign='center';
+  const py=100+Math.sin(S.animate)*8;
+  ctx.font='62px Arial'; ctx.fillText('🏆',GW/2,py);
+
+  ctx.font='bold 36px Arial'; ctx.fillStyle='#ffd700';
+  shadow('#ffaa00',22); ctx.fillText('FELIPE É O CAMPEÃO',GW/2,195); shadow('',0);
+  ctx.font='bold 32px Arial'; ctx.fillStyle='#ff8800';
+  shadow('#ff5500',16); ctx.fillText('DA COPA SUPERGOL! 🎉',GW/2,242); shadow('',0);
+
+  ctx.font='44px Arial'; ctx.fillText('🥉  🥈  🥇',GW/2,305);
+
+  ctx.font='20px Arial'; ctx.fillStyle='#aaffaa';
+  ctx.fillText('Você derrotou todos os times e venceu o Goleiro Gigante!',GW/2,360);
+  ctx.fillStyle='#ffd700'; ctx.fillText(`🪙 Total de moedas: ${S.totalCoins}`,GW/2,395);
+  ctx.font='24px Arial'; ctx.fillStyle='#ffcc44';
+  ctx.fillText('Parabéns, Campeão Felipe! ⭐⭐⭐',GW/2,435);
+
+  btn(GW/2,490,220,50,'#1a44aa','#2255cc','🏠 Menu Inicial');
+}
+
+// ============================================================
+// HELPERS DE DESENHO
+// ============================================================
+function bgGrad(c1,c2){
+  const g=ctx.createLinearGradient(0,0,0,GH);
+  g.addColorStop(0,c1); g.addColorStop(1,c2);
+  ctx.fillStyle=g; ctx.fillRect(0,0,GW,GH);
+}
+
+function btn(cx,cy,w,h,c1,c2,txt){
+  const x=cx-w/2, y=cy-h/2;
+  ctx.fillStyle='rgba(0,0,0,0.35)';
+  rRect(x+3,y+3,w,h,10,'rgba(0,0,0,0.35)');
+  const g=ctx.createLinearGradient(x,y,x,y+h);
+  g.addColorStop(0,c2); g.addColorStop(1,c1);
+  rRect(x,y,w,h,10,g);
+  ctx.strokeStyle='rgba(255,255,255,0.25)'; ctx.lineWidth=2;
+  rRectS(x,y,w,h,10);
+  ctx.textAlign='center'; ctx.font='bold 17px Arial'; ctx.fillStyle='#fff';
+  shadow('rgba(0,0,0,0.5)',3); ctx.fillText(txt,cx,cy+6); shadow('',0);
+}
+
+function rRect(x,y,w,h,r,fs){
+  ctx.fillStyle=fs; ctx.beginPath(); ctx.roundRect(x,y,w,h,r); ctx.fill();
+}
+function rRectS(x,y,w,h,r){
+  ctx.beginPath(); ctx.roundRect(x,y,w,h,r); ctx.stroke();
+}
+function line(x1,y1,x2,y2){ ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke(); }
+function dot(x,y,r,c){ ctx.fillStyle=c; ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill(); }
+function shadow(c,b){ ctx.shadowColor=c; ctx.shadowBlur=b; }
+function clamp(v,a,b){ return Math.max(a,Math.min(b,v)); }
+function dist(ax,ay,bx,by){ return Math.sqrt((ax-bx)**2+(ay-by)**2); }
+
+// ============================================================
+// CLIQUES E TOQUES
+// ============================================================
+canvas.addEventListener('click', handleClick);
+canvas.addEventListener('touchend', e=>{
+  e.preventDefault();
+  const t=e.changedTouches[0];
+  const r=canvas.getBoundingClientRect();
+  const sx=canvas.width/r.width, sy=canvas.height/r.height;
+  handleClick({clientX:t.clientX,clientY:t.clientY,_rect:r,_sx:sx,_sy:sy});
+},{passive:false});
+
+function handleClick(e){
+  const r=e._rect||canvas.getBoundingClientRect();
+  const sx=e._sx||(canvas.width/r.width), sy=e._sy||(canvas.height/r.height);
+  const mx=(e.clientX-r.left)*sx, my=(e.clientY-r.top)*sy;
+
+  switch(S.screen){
+    case 'intro':
+      if(hit(mx,my,GW/2,310,210,54)){ S.screen='phases'; }
+      if(hit(mx,my,GW/2,380,210,46)){ S.screen='howto'; }
+      if(hit(mx,my,GW/2,442,210,46)){ S.screen='phases'; }
+      break;
+    case 'howto':
+      if(hit(mx,my,GW/2,510,200,44)){ S.screen='intro'; }
+      break;
+    case 'phases':
+      const ys=[150,280,420];
+      for(let i=0;i<3;i++){
+        if(S.unlocked[i] && mx>GW/2-285&&mx<GW/2+285&&my>ys[i]-55&&my<ys[i]+55){
+          S.phase=i; initMatch(); S.screen='match';
+        }
+      }
+      if(hit(mx,my,GW/2,515,200,40)){ S.screen='intro'; }
+      break;
+    case 'half':
+      if(hit(mx,my,GW/2,440,230,56)){ startSecondHalf(); }
+      break;
+    case 'victory':
+      if(hit(mx,my,GW/2,470,240,54)){ S.screen='phases'; }
+      break;
+    case 'defeat':
+      if(hit(mx,my,GW/2,420,230,54)){ initMatch(); S.screen='match'; }
+      if(hit(mx,my,GW/2,490,200,44)){ S.screen='intro'; }
+      break;
+    case 'champ':
+      if(hit(mx,my,GW/2,490,220,50)){ S.screen='intro'; }
+      break;
+    case 'match':
+      // Botões mobile na tela
+      const mbtns=[
+        {x:GW-140,y:GH-55,r:30,fn:doKick},
+        {x:GW-72, y:GH-75,r:24,fn:doFireKick},
+        {x:GW-72, y:GH-30,r:24,fn:doSlide},
+        {x:GW-205,y:GH-65,r:24,fn:doSpeed},
+      ];
+      mbtns.forEach(b=>{ if(dist(mx,my,b.x,b.y)<b.r+5) b.fn(); });
+      break;
+  }
+}
+
+function hit(mx,my,cx,cy,w,h){
+  return mx>cx-w/2&&mx<cx+w/2&&my>cy-h/2&&my<cy+h/2;
+}
+
+// ============================================================
+// CONTROLES TOUCH JOYSTICK
+// ============================================================
+canvas.addEventListener('touchstart', e=>{
+  e.preventDefault();
+  const r=canvas.getBoundingClientRect();
+  const sx=canvas.width/r.width, sy=canvas.height/r.height;
+  for(const t of e.changedTouches){
+    const tx=(t.clientX-r.left)*sx, ty=(t.clientY-r.top)*sy;
+    if(S.screen==='match' && tx<GW/2 && ty>GH*0.55){
+      touchJoy={id:t.identifier,sx:tx,sy:ty};
+    }
+    // Botões de ação
+    if(S.screen==='match'){
+      const mb2=[
+        {x:GW-140,y:GH-55,r:30,fn:doKick},
+        {x:GW-72, y:GH-75,r:24,fn:doFireKick},
+        {x:GW-72, y:GH-30,r:24,fn:doSlide},
+        {x:GW-205,y:GH-65,r:24,fn:doSpeed},
+      ];
+      mb2.forEach(b=>{ if(dist(tx,ty,b.x,b.y)<b.r+8) b.fn(); });
+    }
+  }
+},{passive:false});
+
+canvas.addEventListener('touchmove', e=>{
+  e.preventDefault();
+  const r=canvas.getBoundingClientRect();
+  const sx=canvas.width/r.width, sy=canvas.height/r.height;
+  for(const t of e.changedTouches){
+    if(t.identifier===touchJoy.id){
+      const tx=(t.clientX-r.left)*sx, ty=(t.clientY-r.top)*sy;
+      const dx=tx-touchJoy.sx, dy=ty-touchJoy.sy;
+      MK.left=dx<-14; MK.right=dx>14; MK.up=dy<-14; MK.down=dy>14;
+    }
+  }
+},{passive:false});
+
+canvas.addEventListener('touchend', e=>{
+  e.preventDefault();
+  for(const t of e.changedTouches){
+    if(t.identifier===touchJoy.id){
+      MK.left=MK.right=MK.up=MK.down=false;
+      touchJoy.id=-1;
+    }
+  }
+},{passive:false});
+
+// ============================================================
+// LOOP PRINCIPAL
+// ============================================================
+function loop(ts){
+  const dt=Math.min((ts-lastT)/1000, 0.05);
+  lastT=ts;
+  update(dt);
+  render();
+  requestAnimationFrame(loop);
+}
+lastT=performance.now();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
